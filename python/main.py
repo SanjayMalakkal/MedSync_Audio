@@ -6,6 +6,9 @@ import json
 from prompt import build_prompt
 from service import stream_extract
 
+# NEW: Backend Session Memory (In-memory storage for clinical context)
+SESSIONS = {}
+
 class ExtractionSchema(BaseModel):
     fields: list[str]
 
@@ -133,18 +136,32 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
+            msg_type = message.get("type")
+            session_id = str(message.get("session_id", "default"))
 
-            if message.get("type") == "audio":
-                session_id = message.get("session_id", "unknown")
+            # NEW: Allow clearing the session context
+            if msg_type == "reset":
+                SESSIONS[session_id] = {}
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "reset",
+                    "message": f"Session {session_id} reset."
+                })
+                print(f"Session reset: {session_id}")
+                continue
+
+            if msg_type == "audio":
                 audio_data_base64 = message.get("audio_data")
                 mime_type = message.get("mime_type", "audio/webm")
-                previous_data = message.get("previous_data")
+                
+                # NEW: Retrieve data from BACKEND memory instead of frontend
+                previous_data = SESSIONS.get(session_id, {})
                 
                 print(f"Received audio chunk for session: {session_id}")
                 if previous_data:
-                    print(f"Context provided: {list(previous_data.keys())}")
+                    print(f"Backend context found for {session_id}: {list(previous_data.keys())}")
                 else:
-                    print("No previous context provided.")
+                    print(f"New or empty session for {session_id}")
                 
                 import base64
                 audio_bytes = base64.b64decode(audio_data_base64)
@@ -162,19 +179,31 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 await websocket.send_json({
                     "type": "stream_start",
-                    "stream_id": message.get("session_id", "default")
+                    "stream_id": session_id
                 })
 
+                full_response_text = ""
                 try:
                     async for chunk in stream_extract(
                         audio_bytes,
                         prompt,
                         mime_type=mime_type
                     ):
+                        full_response_text += chunk
                         await websocket.send_json({
                             "type": "stream_chunk",
                             "text": chunk
                         })
+                    
+                    # Store final extraction for the next chunk
+                    if full_response_text.strip().startswith("{"):
+                        try:
+                            extracted_data = json.loads(full_response_text)
+                            SESSIONS[session_id] = extracted_data
+                            print(f"Saved state for {session_id}")
+                        except Exception as e:
+                            print(f"Failed to save session state: {e}")
+
                 except Exception as e:
                     await websocket.send_json({
                         "type": "error",

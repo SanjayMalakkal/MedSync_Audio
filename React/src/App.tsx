@@ -162,7 +162,11 @@ export default function App() {
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
       isRecordingRef.current = true;
-      sessionIdRef.current = Date.now().toString();
+
+      // NEW: Only create a new session ID if we don't already have one (Persist context)
+      if (!sessionIdRef.current) {
+        sessionIdRef.current = Date.now().toString();
+      }
 
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -183,8 +187,8 @@ export default function App() {
           audioChunksRef.current = [];
           mediaRecorder.start();
         } else {
-          // Final stop
-          sessionIdRef.current = null;
+          // Final stop (Manual click by user)
+          // sessionIdRef.current = null; // Removed: Persist across manual stops
           stream.getTracks().forEach(track => track.stop());
           if (audioContext.state !== 'closed') {
             audioContext.close();
@@ -213,7 +217,7 @@ export default function App() {
         const volume = dataArray.reduce((p, c) => p + c, 0) / dataArray.length;
         setCurrentVolume(volume);
 
-        const SILENCE_DURATION = 1500; // 1.5 seconds
+        const SILENCE_DURATION = 2500;
 
         if (volume < silenceThreshold) {
           if (silenceStartRef.current === null) {
@@ -288,7 +292,7 @@ export default function App() {
         session_id: sessionId,
         audio_data: base64Audio,
         mime_type: blob.type || 'audio/webm',
-        previous_data: lastExtractedDataRef.current
+        // previous_data: lastExtractedDataRef.current // Removed: Now managed by backend SESSIONS
       };
 
       ws.send(JSON.stringify(message));
@@ -309,6 +313,30 @@ export default function App() {
     if (recordingState === 'recording') {
       stopRecording();
     }
+  };
+
+  const handleNewSession = () => {
+    // Explicitly reset the session context both locally and on the backend
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN && sessionIdRef.current) {
+      ws.send(JSON.stringify({
+        type: 'reset',
+        session_id: sessionIdRef.current
+      }));
+    }
+
+    sessionIdRef.current = null;
+    lastExtractedDataRef.current = null;
+    setLastExtractedData(null);
+    setMessages([]);
+    setStreamingResponse('');
+
+    // If we're recording, we also stop it
+    if (recordingState !== 'idle') {
+      stopRecording();
+    }
+
+    console.log('Session reset completely');
   };
 
   return (
@@ -337,6 +365,15 @@ export default function App() {
               </p>
             </div>
           </div>
+
+          {/* NEW: New Patient Button */}
+          <button
+            onClick={handleNewSession}
+            className="flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors border border-slate-200"
+          >
+            <Bot className="w-4 h-4" />
+            <span className="text-xs font-bold uppercase tracking-wider">New Patient / Reset</span>
+          </button>
         </div>
       </div>
 
