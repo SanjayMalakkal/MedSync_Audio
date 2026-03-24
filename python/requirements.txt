@@ -5,3 +5,7 @@ pydantic
 google-generativeai
 python-dotenv
 websockets
+torch
+numpy
+silero-vad
+scipy

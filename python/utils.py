@@ -1,56 +1,42 @@
 import os
 import wave
-import json
 import numpy as np
 import re
 from typing import Optional, List, Tuple
 
 class AudioProcessor:
     """
-    Audio processing utilities including VAD and filtering, 
-    adapted from m.py for use with Gemini.
+    Handles VAD (Voice Activity Detection) and Hallucination Filtering.
     """
     
-    # Common noise/hallucination patterns to filter out
-    PATTERNS = {
-        "social_media": [
-            r"thanks?\s*(for)?\s*(watching|listening|viewing)",
-            r"(please\s*)?(like\s*(and|&))?\s*subscribe",
-            r"(see you|catch you)\s*(in\s*the)?\s*next\s*(video|episode|time)",
-            r"don't\s*forget\s*to\s*subscribe",
-            r"hit\s*(that|the)\s*(like|subscribe|bell)",
-        ],
-        "attribution": [
-            r"subtitles?\s*(by|created|provided)",
-            r"captions?\s*(by|created|provided)",
-            r"transcribed?\s*by",
-            r"translated?\s*by",
-            r"copyright\s*\d{4}",
-        ],
-        "noise": [
-            r"^\.{2,}$",
-            r"^[ \.\,\!\?]+$",
-            r"^(uh|um|hmm|hm|ah|oh|eh)\s*$",
-        ]
-    }
+    # regex patterns from m.py
+    HALLUCINATION_PATTERNS = [
+        r"^thanks?\s*(for)?\s*(watching|listening|viewing)",
+        r"^(please\s*)?(like\s*(and|&))?\s*subscribe",
+        r"^(see you|catch you)\s*(in\s*the)?\s*next\s*(video|episode|time)",
+        r"^subtitles?\s*(by|created|provided)",
+        r"^captions?\s*(by|created|provided)",
+        r"^transcribed?\s*by",
+        r"^translated?\s*by",
+        r"^\[?(music|applause|laughter|silence)\]?$",
+        r"^♪+$",
+        r"^\.{2,}$",
+        r"^(uh|um|hmm|hm|ah|oh|eh)\s*$",
+        r"^you\s*$",
+        r"^indoctrinate\.?$",
+        r"medical\s*consultation\.?$"
+    ]
 
-    # Minimum thresholds
-    MIN_AUDIO_DURATION = 0.3
     MIN_RMS_ENERGY = 0.002
-    MIN_SPEECH_RATIO = 0.02
+    MIN_AUDIO_DURATION = 0.3
 
     def __init__(self, use_vad: bool = True):
         self.use_vad = use_vad
         self._vad_model = None
         self._vad_utils = None
-        self._compiled_patterns = {
-            cat: [re.compile(p, re.IGNORECASE) for p in pats]
-            for cat, pats in self.PATTERNS.items()
-        }
+        self._compiled_patterns = [re.compile(p, re.IGNORECASE) for p in self.HALLUCINATION_PATTERNS]
 
-    @property
-    def vad_model(self):
-        """Lazy load VAD model."""
+    def _load_vad(self):
         if self._vad_model is None and self.use_vad:
             try:
                 import torch
@@ -62,61 +48,77 @@ class AudioProcessor:
                     trust_repo=True
                 )
                 self._vad_utils = utils
-                print("[AudioProcessor] Silero VAD loaded.")
+                print("[AudioProcessor] Silero VAD loaded")
             except Exception as e:
-                print(f"[AudioProcessor] VAD load failed: {e}. Using RMS only.")
+                print(f"[AudioProcessor] VAD Load Error: {e}")
                 self.use_vad = False
-        return self._vad_model
 
     def is_valid_audio(self, audio_bytes: bytes) -> bool:
-        """Check if audio contains sufficient speech content."""
-        if len(audio_bytes) < 1000: # Very basic size check
-            return False
-            
+        """Check if audio has sufficient energy and speech."""
+        import tempfile
+        import os
+        
+        if not audio_bytes: return False
+        
         try:
-            # Basic RMS check
-            import io
-            arr = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            rms = np.sqrt(np.mean(arr**2))
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
+                temp_file.write(audio_bytes)
+                temp_path = temp_file.name
             
-            if rms < self.MIN_RMS_ENERGY:
-                print(f"[AudioProcessor] Rejected: Low energy ({rms:.5f})")
-                return False
-
-            if self.use_vad and self.vad_model:
+            try:
                 import torch
-                get_speech_timestamps, _, _, *_ = self._vad_utils
-                wav = torch.from_numpy(arr)
+                import torchaudio
+                import torchaudio.transforms as T
                 
-                # We assume 16kHz for Gemini usually, but check if we need to adjust
-                # Silero VAD expects 16k or 8k
-                speech_timestamps = get_speech_timestamps(
-                    wav, self.vad_model, threshold=0.4, sampling_rate=16000, return_seconds=True
-                )
+                # Load via torchaudio (handles webm/opus if ffmpeg is present)
+                waveform, sample_rate = torchaudio.load(temp_path)
                 
-                if not speech_timestamps:
-                    print("[AudioProcessor] Rejected: No speech detected by VAD")
-                    return False
+                # Resample to 16kHz for Silero VAD
+                if sample_rate != 16000:
+                    resampler = T.Resample(sample_rate, 16000)
+                    waveform = resampler(waveform)
                 
-                total_speech = sum(ts['end'] - ts['start'] for ts in speech_timestamps)
-                duration = len(arr) / 16000
-                if (total_speech / duration) < self.MIN_SPEECH_RATIO:
-                    print(f"[AudioProcessor] Rejected: Low speech ratio ({total_speech/duration:.2f})")
+                # Convert to mono
+                if waveform.shape[0] > 1:
+                    waveform = waveform.mean(dim=0, keepdim=True)
+                
+                audio_data = waveform.squeeze().numpy()
+                
+                if len(audio_data) == 0: return False
+                
+                duration = len(audio_data) / 16000
+                if duration < self.MIN_AUDIO_DURATION: return False
+                
+                rms = np.sqrt(np.mean(audio_data**2))
+                if rms < self.MIN_RMS_ENERGY:
+                    print(f"[AudioProcessor] Rejected: Silent (RMS: {rms:.4f})")
                     return False
 
-            return True
+                if self.use_vad:
+                    self._load_vad()
+                    if self._vad_model:
+                        get_speech_timestamps, _, _, *_ = self._vad_utils
+                        wav = torch.from_numpy(audio_data)
+                        ts = get_speech_timestamps(wav, self._vad_model, sampling_rate=16000)
+                        if not ts:
+                            print(f"[AudioProcessor] Rejected: No speech detected by VAD")
+                            return False
+                
+                return True
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
         except Exception as e:
-            print(f"[AudioProcessor] Error in validation: {e}")
-            return True # Fail-safe: process anyway
+            print(f"[AudioProcessor] Validation Error: {e}")
+            return True # Fail open
+
 
     def clean_text(self, text: str) -> str:
-        """Filter out hallucinated patterns from text output."""
-        if not text:
-            return ""
-            
-        cleaned = text
-        for cat, patterns in self._compiled_patterns.items():
-            for p in patterns:
-                cleaned = p.sub("", cleaned)
-        
-        return re.sub(r'\s+', ' ', cleaned).strip()
+        """Filter out hallucination patterns."""
+        if not text: return ""
+        t = text.strip()
+        for p in self._compiled_patterns:
+            if p.search(t):
+                print(f"[AudioProcessor] Filtered hallucination: '{t}'")
+                return ""
+        return t

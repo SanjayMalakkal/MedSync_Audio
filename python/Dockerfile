@@ -7,7 +7,9 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
 
 # Copy the requirements file into the container
 COPY requirements.txt .

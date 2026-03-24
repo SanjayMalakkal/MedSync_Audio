@@ -5,9 +5,19 @@ import json
 
 from prompt import build_prompt
 from service import stream_extract
+from utils import AudioProcessor
+from contextlib import asynccontextmanager
 
 # NEW: Backend Session Memory (In-memory storage for clinical context)
 SESSIONS = {}
+processor = AudioProcessor(use_vad=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Lazy load VAD model on startup
+    processor._load_vad()
+    yield
+    # Cleanup if needed
 
 class ExtractionSchema(BaseModel):
     fields: list[str]
@@ -27,7 +37,7 @@ class ExtractionSchema(BaseModel):
 
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -165,6 +175,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 import base64
                 audio_bytes = base64.b64decode(audio_data_base64)
+                
+                if not processor.is_valid_audio(audio_bytes):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "No speech detected or audio too quiet."
+                    })
+                    continue
 
                 # Static schema for medical extraction
                 schema = {
@@ -189,13 +206,17 @@ async def websocket_endpoint(websocket: WebSocket):
                         prompt,
                         mime_type=mime_type
                     ):
-                        full_response_text += chunk
+                        cleaned_chunk = processor.clean_text(chunk)
+                        if not cleaned_chunk: continue
+                        
+                        full_response_text += cleaned_chunk
                         await websocket.send_json({
                             "type": "stream_chunk",
-                            "text": chunk
+                            "text": cleaned_chunk
                         })
                     
                     # Store final extraction for the next chunk
+                    # Robust check: clean the full text one last time
                     if full_response_text.strip().startswith("{"):
                         try:
                             extracted_data = json.loads(full_response_text)
@@ -213,6 +234,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({
                     "type": "stream_end"
                 })
+
 
     except WebSocketDisconnect:
         print("Client disconnected")
