@@ -20,19 +20,32 @@ async def lifespan(app: FastAPI):
     # Cleanup if needed
 
 class ExtractionSchema(BaseModel):
-    fields: list[str]
+    # Support either a list of strings or a dictionary mapping key names to descriptions.
+    # To remain backwards-compatible and flexible, we can just accept dict directly.
+    # Wait, the frontend sends dict or list depending on user input? 
+    # Let's change this to just accept Any or dict, or handle validation dynamically.
+    fields: dict | list[str]
 
     @field_validator("fields")
     @classmethod
     def validate_fields(cls, v):
         if not v:
-            raise ValueError("fields list cannot be empty")
-        if len(v) > 50:
-            raise ValueError("Too many fields — max 50 allowed")
-        cleaned = [f.strip() for f in v if f.strip()]
-        if not cleaned:
-            raise ValueError("fields cannot be blank strings")
-        return cleaned
+            raise ValueError("fields cannot be empty")
+        if isinstance(v, list):
+            if len(v) > 50:
+                raise ValueError("Too many fields — max 50 allowed")
+            cleaned = [f.strip() for f in v if f.strip()]
+            if not cleaned:
+                raise ValueError("fields cannot be blank strings")
+            return cleaned
+        elif isinstance(v, dict):
+            if len(v) > 50:
+                raise ValueError("Too many fields — max 50 allowed")
+            cleaned = {k.strip(): val.strip() if isinstance(val, str) else val for k, val in v.items() if k.strip()}
+            if not cleaned:
+                raise ValueError("fields cannot be blank strings")
+            return cleaned
+        return v
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -183,15 +196,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     continue
 
-                # Static schema for medical extraction
-                schema = {
-                    "fields": [
-                        "Chief complaint",
-                        "duration",
-                        "Cause",
-                        "severity"
-                    ]
-                }
+                # Dynamic schema from frontend, fallback to default if not provided
+                schema = message.get("schema")
+                if not schema:
+                    schema = {
+                        "fields": [
+                            "Chief complaint",
+                            "duration",
+                            "Cause",
+                            "severity"
+                        ]
+                    }
+                
+                # Check if it was packed exactly as {"key":"value"} instead of {"fields": ...}
+                # The frontend will send schema as a dictionary: { "Chief complaint": "...", "duration": "..." }
+                # The build_prompt function now handles both cases perfectly.
                 prompt = build_prompt(schema, context=previous_data)
 
                 await websocket.send_json({

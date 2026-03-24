@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Square, Send, Bot, User, Volume2 } from 'lucide-react';
+import { Mic, MicOff, Square, Send, Bot, User, Volume2, Plus, Trash2, ArrowRight, HelpCircle } from 'lucide-react';
 
 type Message = {
   id: string;
@@ -41,6 +41,14 @@ export default function App() {
   const [lastExtractedData, setLastExtractedData] = useState<any>(null);
   const [currentVolume, setCurrentVolume] = useState(0);
   const [silenceThreshold, setSilenceThreshold] = useState(50);
+
+  // NEW: Schema state
+  const [schemaPairs, setSchemaPairs] = useState([
+    { id: '1', key: 'Chief complaint', value: '' },
+    { id: '2', key: 'duration', value: '' },
+    { id: '3', key: 'Cause', value: '' },
+    { id: '4', key: 'severity', value: '' }
+  ]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -287,12 +295,20 @@ export default function App() {
         )
       );
 
+      // Convert schemaPairs to object
+      const schemaPayload = schemaPairs.reduce((acc, pair) => {
+        if (pair.key.trim()) {
+          acc[pair.key.trim()] = pair.value.trim();
+        }
+        return acc;
+      }, {} as Record<string, string>);
+
       const message = {
         type: 'audio',
         session_id: sessionId,
         audio_data: base64Audio,
         mime_type: blob.type || 'audio/webm',
-        // previous_data: lastExtractedDataRef.current // Removed: Now managed by backend SESSIONS
+        schema: schemaPayload
       };
 
       ws.send(JSON.stringify(message));
@@ -339,6 +355,20 @@ export default function App() {
     console.log('Session reset completely');
   };
 
+  const handleAddSchemaPair = () => {
+    setSchemaPairs([...schemaPairs, { id: Date.now().toString(), key: '', value: '' }]);
+  };
+
+  const handleUpdateSchemaPair = (id: string, field: 'key' | 'value', value: string) => {
+    setSchemaPairs(schemaPairs.map(pair =>
+      pair.id === id ? { ...pair, [field]: value } : pair
+    ));
+  };
+
+  const handleRemoveSchemaPair = (id: string) => {
+    setSchemaPairs(schemaPairs.filter(pair => pair.id !== id));
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 via-white to-zinc-100">
       {/* Header */}
@@ -374,6 +404,64 @@ export default function App() {
             <Bot className="w-4 h-4" />
             <span className="text-xs font-bold uppercase tracking-wider">New Patient / Reset</span>
           </button>
+        </div>
+      </div>
+
+      {/* Schema Builder Area */}
+      <div className="bg-white border-b border-slate-200 px-6 py-4">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Key Value Pairs</h2>
+              <HelpCircle className="w-4 h-4 text-teal-400" />
+            </div>
+            <button
+              onClick={handleAddSchemaPair}
+              className="flex items-center space-x-2 px-4 py-2 bg-[#2f3f9f] hover:bg-[#25327b] text-white rounded-[4px] transition-colors text-sm font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add New Pair</span>
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {schemaPairs.map((pair) => (
+              <div key={pair.id} className="flex items-center space-x-3">
+                <div className="relative flex-1 max-w-[200px]">
+                  <input
+                    type="text"
+                    value={pair.key}
+                    onChange={(e) => handleUpdateSchemaPair(pair.id, 'key', e.target.value)}
+                    placeholder="key_name"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                  />
+                  <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
+                </div>
+
+                <div className="flex-shrink-0 bg-slate-700 rounded-full p-1">
+                  <ArrowRight className="w-3 h-3 text-white" />
+                </div>
+
+                <div className="relative flex-1 max-w-[200px]">
+                  <input
+                    type="text"
+                    value={pair.value}
+                    onChange={(e) => handleUpdateSchemaPair(pair.id, 'value', e.target.value)}
+                    placeholder="value_name"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                  />
+                  <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
+                </div>
+
+                <button
+                  onClick={() => handleRemoveSchemaPair(pair.id)}
+                  className="p-2 text-[#2f3f9f] hover:bg-indigo-50 rounded-[4px] transition-colors"
+                >
+                  <Trash2 className="w-5 h-5 fill-[#2f3f9f] text-white" />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -2,15 +2,27 @@
 import json
 
 def build_prompt(schema: dict, context: dict = None) -> str:
-    fields = schema.get("fields", [])
-    field_list = "\n".join([f"- {f}" for f in fields])
+    # Handle the old format {"fields": ["a", "b"]} and the new format {"key": "value", ...}
+    if "fields" in schema and isinstance(schema["fields"], list):
+        schema_dict = {f: "" for f in schema["fields"]}
+    else:
+        schema_dict = schema
+
+    field_list_items = []
+    for k, v in schema_dict.items():
+        if v:
+            field_list_items.append(f"- {k}: {v}")
+        else:
+            field_list_items.append(f"- {k}")
+            
+    field_list = "\n".join(field_list_items)
     
     context_str = ""
     if context:
         context_str = f"\n\nHere is the information already extracted so far:\n{json.dumps(context, indent=2)}\n\nPlease Update this information or fill in new fields based on new input."
     
     # Dynamic example matching actual requested fields
-    example_output = {f: "<extracted value or null>" for f in fields}
+    example_output = {k: "<extracted value or null>" for k in schema_dict.keys()}
 
     return f"""You are a precise medical scribe assistant analyzing a doctor-patient conversation.
 
