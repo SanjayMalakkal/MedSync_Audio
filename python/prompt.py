@@ -3,8 +3,13 @@ import json
 
 def build_prompt(schema: dict, context: dict = None) -> str:
     # Handle the old format {"fields": ["a", "b"]} and the new format {"key": "value", ...}
-    if "fields" in schema and isinstance(schema["fields"], list):
-        schema_dict = {f: "" for f in schema["fields"]}
+    if "fields" in schema:
+        if isinstance(schema["fields"], list):
+            schema_dict = {f: "" for f in schema["fields"]}
+        elif isinstance(schema["fields"], dict):
+            schema_dict = schema["fields"]
+        else:
+            schema_dict = schema
     else:
         schema_dict = schema
 

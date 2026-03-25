@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Square, Send, Bot, User, Volume2, Plus, Trash2, ArrowRight, HelpCircle } from 'lucide-react';
+import { Mic, MicOff, Square, Send, Bot, User, Volume2, Plus, Trash2, ArrowRight, HelpCircle, Settings } from 'lucide-react';
 
 type Message = {
   id: string;
@@ -43,11 +43,9 @@ export default function App() {
   const [silenceThreshold, setSilenceThreshold] = useState(50);
 
   // NEW: Schema state
+  const [isSchemaVisible, setIsSchemaVisible] = useState(false);
   const [schemaPairs, setSchemaPairs] = useState([
-    { id: '1', key: 'Chief complaint', value: '' },
-    { id: '2', key: 'duration', value: '' },
-    { id: '3', key: 'Cause', value: '' },
-    { id: '4', key: 'severity', value: '' }
+    { id: '1', key: '', value: '' }
   ]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -396,74 +394,94 @@ export default function App() {
             </div>
           </div>
 
-          {/* NEW: New Patient Button */}
-          <button
-            onClick={handleNewSession}
-            className="flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors border border-slate-200"
-          >
-            <Bot className="w-4 h-4" />
-            <span className="text-xs font-bold uppercase tracking-wider">New Patient / Reset</span>
-          </button>
+          <div className="flex items-center space-x-3">
+            {/* NEW: Configure Schema Button */}
+            <button
+              onClick={() => setIsSchemaVisible(!isSchemaVisible)}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors border ${
+                isSchemaVisible 
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
+                  : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <Settings className={`w-4 h-4 ${isSchemaVisible ? 'animate-spin-slow' : ''}`} />
+              <span className="text-xs font-bold uppercase tracking-wider">Configure Schema</span>
+            </button>
+
+            {/* NEW: New Patient Button */}
+            <button
+              onClick={handleNewSession}
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors border border-slate-200"
+            >
+              <Bot className="w-4 h-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">New Patient / Reset</span>
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Schema Builder Area */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Key Value Pairs</h2>
-              <HelpCircle className="w-4 h-4 text-teal-400" />
-            </div>
-            <button
-              onClick={handleAddSchemaPair}
-              className="flex items-center space-x-2 px-4 py-2 bg-[#2f3f9f] hover:bg-[#25327b] text-white rounded-[4px] transition-colors text-sm font-medium"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add New Pair</span>
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {schemaPairs.map((pair) => (
-              <div key={pair.id} className="flex items-center space-x-3">
-                <div className="relative flex-1 max-w-[200px]">
-                  <input
-                    type="text"
-                    value={pair.key}
-                    onChange={(e) => handleUpdateSchemaPair(pair.id, 'key', e.target.value)}
-                    placeholder="key_name"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
-                  />
-                  <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
-                </div>
-
-                <div className="flex-shrink-0 bg-slate-700 rounded-full p-1">
-                  <ArrowRight className="w-3 h-3 text-white" />
-                </div>
-
-                <div className="relative flex-1 max-w-[200px]">
-                  <input
-                    type="text"
-                    value={pair.value}
-                    onChange={(e) => handleUpdateSchemaPair(pair.id, 'value', e.target.value)}
-                    placeholder="value_name"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
-                  />
-                  <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
-                </div>
-
-                <button
-                  onClick={() => handleRemoveSchemaPair(pair.id)}
-                  className="p-2 text-[#2f3f9f] hover:bg-indigo-50 rounded-[4px] transition-colors"
-                >
-                  <Trash2 className="w-5 h-5 fill-[#2f3f9f] text-white" />
-                </button>
+      {isSchemaVisible && (
+        <div className="bg-white border-b border-slate-200 px-6 py-4 animate-in slide-in-from-top duration-300">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
+                <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Key Value Pairs</h2>
+                <HelpCircle className="w-4 h-4 text-teal-400" />
               </div>
-            ))}
+              <button
+                onClick={handleAddSchemaPair}
+                className="flex items-center space-x-2 px-4 py-2 bg-[#2f3f9f] hover:bg-[#25327b] text-white rounded-[4px] transition-colors text-sm font-medium"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add New Pair</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {schemaPairs.map((pair) => (
+                <div key={pair.id} className="flex items-center space-x-3">
+                  <div className="relative flex-1 max-w-[200px]">
+                    <input
+                      type="text"
+                      value={pair.key}
+                      onChange={(e) => handleUpdateSchemaPair(pair.id, 'key', e.target.value)}
+                      placeholder="key_name"
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                    />
+                    <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
+                  </div>
+
+                  <div className="flex-shrink-0 bg-slate-700 rounded-full p-1">
+                    <ArrowRight className="w-3 h-3 text-white" />
+                  </div>
+
+                  <div className="relative flex-1 max-w-[200px]">
+                    <input
+                      type="text"
+                      value={pair.value}
+                      onChange={(e) => handleUpdateSchemaPair(pair.id, 'value', e.target.value)}
+                      placeholder="value_name"
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                    />
+                    <Plus className="w-4 h-4 text-[#2f3f9f] absolute right-2 top-2.5 bg-white rounded-full border border-[#2f3f9f]" />
+                  </div>
+
+                  <button
+                    onClick={() => handleRemoveSchemaPair(pair.id)}
+                    className="p-2 text-[#2f3f9f] hover:bg-indigo-50 rounded-[4px] transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5 fill-[#2f3f9f] text-white" />
+                  </button>
+                </div>
+              ))}
+              {schemaPairs.length === 0 && (
+                <p className="text-center text-slate-400 text-xs py-4 italic">No fields configured. Add a pair to start extraction.</p>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-6 py-4">

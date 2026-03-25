@@ -120,6 +120,9 @@ async def extract_stream(
 
     if isinstance(raw, list):
         raw = {"fields": raw}
+    elif isinstance(raw, dict) and "fields" not in raw:
+        # NEW: Allow direct JSON dictionary without "fields" wrapper
+        raw = {"fields": raw}
 
     try:
         validated_schema = ExtractionSchema.model_validate(raw)
