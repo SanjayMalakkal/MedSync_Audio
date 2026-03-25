@@ -1,8 +1,10 @@
 # prompt.py
 import json
 
-def build_prompt(schema: dict, context: dict = None) -> str:
-    # Handle the old format {"fields": ["a", "b"]} and the new format {"key": "value", ...}
+from typing import Optional
+
+def build_prompt(schema: dict, context: Optional[dict] = None, instructions: Optional[str] = None, knowledgebase: Optional[str] = None) -> str:
+    schema_dict: dict = {}
     if "fields" in schema:
         if isinstance(schema["fields"], list):
             schema_dict = {f: "" for f in schema["fields"]}
@@ -26,13 +28,21 @@ def build_prompt(schema: dict, context: dict = None) -> str:
     if context:
         context_str = f"\n\nHere is the information already extracted so far:\n{json.dumps(context, indent=2)}\n\nPlease Update this information or fill in new fields based on new input."
     
+    kb_str = ""
+    if knowledgebase:
+        kb_str = f"\n\nKNOWLEDGE BASE (Priority Reference for Medications/Lab Orders):\n{knowledgebase}\n\nIMPORTANT: Use the above knowledge base as the primary source of truth for specific names, dosages, or procedures mentioned in the audio. If the knowledge base contains specific instructions or data, ensure the extraction adheres to it."
+
+    instructions_str = ""
+    if instructions:
+        instructions_str = f"\n\nADDITIONAL INSTRUCTIONS:\n{instructions}"
+
     # Dynamic example matching actual requested fields
     example_output = {k: "<extracted value or null>" for k in schema_dict.keys()}
 
     return f"""You are a precise medical scribe assistant analyzing a doctor-patient conversation.
 
 Extract ONLY the following fields into JSON:
-{field_list}{context_str}
+{field_list}{context_str}{kb_str}{instructions_str}
 
 RULES:
 1. OUTPUT: Return ONLY valid JSON. No markdown, no preamble. 

@@ -20,11 +20,9 @@ async def lifespan(app: FastAPI):
     # Cleanup if needed
 
 class ExtractionSchema(BaseModel):
-    # Support either a list of strings or a dictionary mapping key names to descriptions.
-    # To remain backwards-compatible and flexible, we can just accept dict directly.
-    # Wait, the frontend sends dict or list depending on user input? 
-    # Let's change this to just accept Any or dict, or handle validation dynamically.
     fields: dict | list[str]
+    instructions: str | None = None
+    knowledgebase: str | None = None
 
     @field_validator("fields")
     @classmethod
@@ -76,7 +74,9 @@ ALLOWED_MIMES = {
 @app.post("/extract")
 async def extract_stream(
         audio: UploadFile = File(...),
-        schema: str = Form(...)
+        schema: str = Form(...),
+        instructions: str = Form(None),
+        knowledgebase: str = Form(None)
 ):
     if audio.content_type not in ALLOWED_MIMES:
         return JSONResponse(
@@ -132,7 +132,11 @@ async def extract_stream(
             content={"detail": e.errors()}
         )
 
-    prompt = build_prompt(validated_schema.model_dump())
+    prompt = build_prompt(
+        validated_schema.fields, 
+        instructions=validated_schema.instructions or instructions,
+        knowledgebase=validated_schema.knowledgebase or knowledgebase
+    )
 
     async def generator():
         try:
@@ -211,10 +215,18 @@ async def websocket_endpoint(websocket: WebSocket):
                         ]
                     }
                 
+                instructions = message.get("instructions")
+                knowledgebase = message.get("knowledgebase")
+                
                 # Check if it was packed exactly as {"key":"value"} instead of {"fields": ...}
                 # The frontend will send schema as a dictionary: { "Chief complaint": "...", "duration": "..." }
                 # The build_prompt function now handles both cases perfectly.
-                prompt = build_prompt(schema, context=previous_data)
+                prompt = build_prompt(
+                    schema, 
+                    context=previous_data,
+                    instructions=instructions,
+                    knowledgebase=knowledgebase
+                )
 
                 await websocket.send_json({
                     "type": "stream_start",

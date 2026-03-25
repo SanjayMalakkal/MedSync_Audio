@@ -47,6 +47,8 @@ export default function App() {
   const [schemaPairs, setSchemaPairs] = useState([
     { id: '1', key: '', value: '' }
   ]);
+  const [additionalInstructions, setAdditionalInstructions] = useState('');
+  const [knowledgeBase, setKnowledgeBase] = useState('');
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -306,7 +308,9 @@ export default function App() {
         session_id: sessionId,
         audio_data: base64Audio,
         mime_type: blob.type || 'audio/webm',
-        schema: schemaPayload
+        schema: schemaPayload,
+        instructions: additionalInstructions,
+        knowledgebase: knowledgeBase
       };
 
       ws.send(JSON.stringify(message));
@@ -478,6 +482,28 @@ export default function App() {
               {schemaPairs.length === 0 && (
                 <p className="text-center text-slate-400 text-xs py-4 italic">No fields configured. Add a pair to start extraction.</p>
               )}
+            </div>
+
+            {/* NEW: Additional Instructions and Knowledge Base */}
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-6">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Additional Instructions</label>
+                <textarea
+                  value={additionalInstructions}
+                  onChange={(e) => setAdditionalInstructions(e.target.value)}
+                  placeholder="e.g. Suggest some lab orders or medications for this..."
+                  className="w-full h-24 px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Knowledge Base</label>
+                <textarea
+                  value={knowledgeBase}
+                  onChange={(e) => setKnowledgeBase(e.target.value)}
+                  placeholder="e.g. List of medicines, lab orders, or clinical guidelines..."
+                  className="w-full h-24 px-3 py-2 text-sm border border-slate-200 rounded-[4px] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                />
+              </div>
             </div>
           </div>
         </div>
