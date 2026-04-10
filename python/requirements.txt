@@ -9,3 +9,4 @@ torch
 numpy
 silero-vad
 scipy
+python-socketio

@@ -1,7 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, field_validator, ValidationError
 import json
+import base64
+import socketio
 
 from prompt import build_prompt
 from service import stream_extract
@@ -58,6 +60,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Socket.IO Setup ---
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+socket_app = socketio.ASGIApp(sio, app)
+
+# --- Extraction Events ---
+
+@sio.on("reset_extraction_session", namespace="/extraction")
+async def handle_reset(sid, data):
+    session_id = str(data.get("session_id", "default"))
+    SESSIONS[session_id] = {}
+    await sio.emit("extraction_status", {
+        "status": "reset",
+        "message": f"Session {session_id} reset."
+    }, to=sid, namespace="/extraction")
+    print(f"Extraction session reset: {session_id}")
+
+@sio.on("audio_chunk", namespace="/extraction")
+async def handle_audio_chunk(sid, data):
+    session_id = str(data.get("session_id", "default"))
+    audio_data_base64 = data.get("audio_data")
+    mime_type = data.get("mime_type", "audio/webm")
+    schema = data.get("schema")
+    instructions = data.get("instructions")
+    knowledgebase = data.get("knowledgebase")
+
+    if not audio_data_base64:
+        await sio.emit("extraction_error", {"message": "No audio data provided"}, to=sid, namespace="/extraction")
+        return
+
+    try:
+        audio_bytes = base64.b64decode(audio_data_base64)
+    except Exception as e:
+        await sio.emit("extraction_error", {"message": f"Invalid base64: {str(e)}"}, to=sid, namespace="/extraction")
+        return
+
+    if not processor.is_valid_audio(audio_bytes):
+        await sio.emit("extraction_error", {"message": "No speech detected or audio too quiet."}, to=sid, namespace="/extraction")
+        return
+
+    previous_data = SESSIONS.get(session_id, {})
+    
+    if not schema:
+        schema = {"fields": ["Chief complaint", "duration", "Cause", "severity"]}
+
+    prompt = build_prompt(
+        schema,
+        context=previous_data,
+        instructions=instructions,
+        knowledgebase=knowledgebase
+    )
+
+    await sio.emit("extraction_stream_start", {"stream_id": session_id}, to=sid, namespace="/extraction")
+
+    full_response_text = ""
+    try:
+        async for chunk in stream_extract(audio_bytes, prompt, mime_type=mime_type):
+            cleaned_chunk = processor.clean_text(chunk)
+            if not cleaned_chunk: continue
+            
+            full_response_text += cleaned_chunk
+            await sio.emit("extraction_stream_chunk", {"text": cleaned_chunk}, to=sid, namespace="/extraction")
+        
+        if full_response_text.strip().startswith("{"):
+            try:
+                extracted_data = json.loads(full_response_text)
+                SESSIONS[session_id] = extracted_data
+                print(f"Saved extraction state for {session_id}")
+            except Exception as e:
+                print(f"Failed to save extraction session state: {e}")
+
+    except Exception as e:
+        await sio.emit("extraction_error", {"message": str(e)}, to=sid, namespace="/extraction")
+    
+    # Emit final event with full data and status tag
+    await sio.emit("extraction_stream_end", {
+        "stream_id": session_id,
+        "data": SESSIONS.get(session_id),
+        "text": full_response_text,
+        "status": "completed"
+    }, to=sid, namespace="/extraction")
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 ALLOWED_MIMES = {
@@ -157,124 +239,3 @@ async def extract_stream(
             "Cache-Control": "no-cache",
         }
     )
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            msg_type = message.get("type")
-            session_id = str(message.get("session_id", "default"))
-
-            # NEW: Allow clearing the session context
-            if msg_type == "reset":
-                SESSIONS[session_id] = {}
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "reset",
-                    "message": f"Session {session_id} reset."
-                })
-                print(f"Session reset: {session_id}")
-                continue
-
-            if msg_type == "audio":
-                audio_data_base64 = message.get("audio_data")
-                mime_type = message.get("mime_type", "audio/webm")
-                
-                # NEW: Retrieve data from BACKEND memory instead of frontend
-                previous_data = SESSIONS.get(session_id, {})
-                
-                print(f"Received audio chunk for session: {session_id}")
-                if previous_data:
-                    print(f"Backend context found for {session_id}: {list(previous_data.keys())}")
-                else:
-                    print(f"New or empty session for {session_id}")
-                
-                import base64
-                audio_bytes = base64.b64decode(audio_data_base64)
-                
-                if not processor.is_valid_audio(audio_bytes):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "No speech detected or audio too quiet."
-                    })
-                    continue
-
-                # Dynamic schema from frontend, fallback to default if not provided
-                schema = message.get("schema")
-                if not schema:
-                    schema = {
-                        "fields": [
-                            "Chief complaint",
-                            "duration",
-                            "Cause",
-                            "severity"
-                        ]
-                    }
-                
-                instructions = message.get("instructions")
-                knowledgebase = message.get("knowledgebase")
-                
-                # Check if it was packed exactly as {"key":"value"} instead of {"fields": ...}
-                # The frontend will send schema as a dictionary: { "Chief complaint": "...", "duration": "..." }
-                # The build_prompt function now handles both cases perfectly.
-                prompt = build_prompt(
-                    schema, 
-                    context=previous_data,
-                    instructions=instructions,
-                    knowledgebase=knowledgebase
-                )
-
-                await websocket.send_json({
-                    "type": "stream_start",
-                    "stream_id": session_id
-                })
-
-                full_response_text = ""
-                try:
-                    async for chunk in stream_extract(
-                        audio_bytes,
-                        prompt,
-                        mime_type=mime_type
-                    ):
-                        cleaned_chunk = processor.clean_text(chunk)
-                        if not cleaned_chunk: continue
-                        
-                        full_response_text += cleaned_chunk
-                        await websocket.send_json({
-                            "type": "stream_chunk",
-                            "text": cleaned_chunk
-                        })
-                    
-                    # Store final extraction for the next chunk
-                    # Robust check: clean the full text one last time
-                    if full_response_text.strip().startswith("{"):
-                        try:
-                            extracted_data = json.loads(full_response_text)
-                            SESSIONS[session_id] = extracted_data
-                            print(f"Saved state for {session_id}")
-                        except Exception as e:
-                            print(f"Failed to save session state: {e}")
-
-                except Exception as e:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": str(e)
-                    })
-                
-                await websocket.send_json({
-                    "type": "stream_end"
-                })
-
-
-    except WebSocketDisconnect:
-        print("Client disconnected")
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-        try:
-            await websocket.close()
-        except:
-            pass

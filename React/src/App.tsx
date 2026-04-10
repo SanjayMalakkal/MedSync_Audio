@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff, Square, Send, Bot, User, Volume2, Plus, Trash2, ArrowRight, HelpCircle, Settings } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
 type Message = {
   id: string;
@@ -52,7 +53,7 @@ export default function App() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRef = useRef<Socket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentStreamIdRef = useRef<string>('');
   const accumulatedResponseRef = useRef<string>('');
@@ -66,84 +67,95 @@ export default function App() {
   const sessionIdRef = useRef<string | null>(null);
   const vadAnimationRef = useRef<number | null>(null);
 
-  // WebSocket connection
+  // Socket.IO connection
   useEffect(() => {
-    const connectWebSocket = () => {
-      const wsUrl = (import.meta as any).env?.VITE_WS_URL || 'ws://localhost:8002/ws';
-      const ws = new WebSocket(wsUrl);
+    const connectSocket = () => {
+      let baseUrl = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:8002/extraction';
+      // If VITE_WS_URL is provided, try to extract the base URL from it
+      const wsUrl = (import.meta as any).env?.VITE_WS_URL;
+      if (wsUrl) {
+        baseUrl = wsUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace(/\/ws$/, '');
+      }
 
-      ws.onopen = () => {
-        console.log('WebSocket connected');
+      const socket = io(`${baseUrl}`, {
+        transports: ['websocket'],
+        reconnectionDelay: 3000,
+      });
+
+      socket.on('connect', () => {
+        console.log('Socket.IO connected');
         setWsConnected(true);
-      };
+      });
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === 'stream_start') {
-            currentStreamIdRef.current = data.stream_id || '';
-            accumulatedResponseRef.current = '';
-            setStreamingResponse('');
-          } else if (data.type === 'stream_chunk') {
-            accumulatedResponseRef.current += data.text;
-            setStreamingResponse(accumulatedResponseRef.current);
-          } else if (data.type === 'stream_end') {
-            const finalContent = accumulatedResponseRef.current;
-            if (finalContent) {
-              const newMessage: Message = {
-                id: Date.now().toString(),
-                role: 'assistant',
-                content: finalContent,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, newMessage]);
-
-              // Update last extracted data for merging in next chunk
-              try {
-                if (finalContent.trim().startsWith('{')) {
-                  const parsed = JSON.parse(finalContent);
-                  setLastExtractedData(parsed);
-                  lastExtractedDataRef.current = parsed;
-                }
-              } catch (e) {
-                console.error('Failed to parse final content for state:', e);
-              }
-            }
-            accumulatedResponseRef.current = '';
-            setStreamingResponse('');
-
-            if (!isRecordingRef.current) {
-              setRecordingState('idle');
-            }
-          } else if (data.type === 'error') {
-            console.error('Backend error:', data.message);
-            setRecordingState('idle');
-          }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-        }
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
+      socket.on('disconnect', () => {
+        console.log('Socket.IO disconnected');
         setWsConnected(false);
-        // Attempt to reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
-      };
+      });
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
+      socket.on('extraction_stream_start', (data: { stream_id?: string }) => {
+        currentStreamIdRef.current = data.stream_id || '';
+        accumulatedResponseRef.current = '';
+        setStreamingResponse('');
+      });
 
-      wsRef.current = ws;
+      socket.on('extraction_stream_chunk', (data: { text: string }) => {
+        accumulatedResponseRef.current += data.text;
+        setStreamingResponse(accumulatedResponseRef.current);
+      });
+
+      socket.on('extraction_stream_end', (payload?: { stream_id: string, text?: string, data?: any, status?: string }) => {
+        console.log('Extraction stream end:', payload);
+        const finalContent = payload?.text || accumulatedResponseRef.current;
+
+        if (finalContent) {
+          const newMessage: Message = {
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: finalContent,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, newMessage]);
+
+          if (payload?.data) {
+            setLastExtractedData(payload.data);
+            lastExtractedDataRef.current = payload.data;
+          } else {
+            try {
+              if (finalContent.trim().startsWith('{')) {
+                const parsed = JSON.parse(finalContent);
+                setLastExtractedData(parsed);
+                lastExtractedDataRef.current = parsed;
+              }
+            } catch (e) {
+              console.error('Failed to parse final content for state:', e);
+            }
+          }
+        }
+        accumulatedResponseRef.current = '';
+        setStreamingResponse('');
+
+        if (!isRecordingRef.current) {
+          setRecordingState('idle');
+        }
+      });
+
+      socket.on('extraction_error', (data: { message: string }) => {
+        console.error('Backend error:', data.message);
+        setRecordingState('idle');
+      });
+
+      socket.on('extraction_status', (data: { message: string }) => {
+        console.log('Status update:', data.message);
+      });
+
+      wsRef.current = socket;
     };
 
-    connectWebSocket();
+    connectSocket();
 
     return () => {
       if (wsRef.current) {
-        wsRef.current.close();
+        wsRef.current.disconnect();
       }
     };
   }, []);
@@ -275,9 +287,9 @@ export default function App() {
   };
 
   const sendAudioToBackend = (blob: Blob) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.error('WebSocket not connected');
+    const socket = wsRef.current;
+    if (!socket || !socket.connected) {
+      console.error('Socket.IO not connected');
       return;
     }
 
@@ -313,7 +325,7 @@ export default function App() {
         knowledgebase: knowledgeBase
       };
 
-      ws.send(JSON.stringify(message));
+      socket.emit('audio_chunk', message);
     };
 
     reader.readAsArrayBuffer(blob);
@@ -335,12 +347,11 @@ export default function App() {
 
   const handleNewSession = () => {
     // Explicitly reset the session context both locally and on the backend
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN && sessionIdRef.current) {
-      ws.send(JSON.stringify({
-        type: 'reset',
+    const socket = wsRef.current;
+    if (socket && socket.connected && sessionIdRef.current) {
+      socket.emit('reset_extraction_session', {
         session_id: sessionIdRef.current
-      }));
+      });
     }
 
     sessionIdRef.current = null;
@@ -402,11 +413,10 @@ export default function App() {
             {/* NEW: Configure Schema Button */}
             <button
               onClick={() => setIsSchemaVisible(!isSchemaVisible)}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors border ${
-                isSchemaVisible 
-                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
-                  : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
-              }`}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors border ${isSchemaVisible
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
+                }`}
             >
               <Settings className={`w-4 h-4 ${isSchemaVisible ? 'animate-spin-slow' : ''}`} />
               <span className="text-xs font-bold uppercase tracking-wider">Configure Schema</span>
