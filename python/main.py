@@ -60,9 +60,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Socket.IO Setup ---
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# Increase max_http_buffer_size to 100MB to support long audio recordings
+MAX_BUFFER_SIZE = 100 * 1024 * 1024 
+sio = socketio.AsyncServer(
+    async_mode='asgi', 
+    cors_allowed_origins='*',
+    max_http_buffer_size=MAX_BUFFER_SIZE,
+    logger=True,           # Verbose Socket.IO logs
+    engineio_logger=True,  # Verbose Engine.IO logs
+    ping_timeout=600,       # 10 minute timeout for large audio uploads
+    ping_interval=25
+)
 socket_app = socketio.ASGIApp(sio, app)
+
+@sio.event
+async def connect(sid, environ):
+    print(f"[SocketIO] Global CONNECT: {sid}")
+
+@sio.event
+async def disconnect(sid):
+    print(f"[SocketIO] Global DISCONNECT: {sid}")
 
 # --- Extraction Events ---
 
@@ -86,18 +103,26 @@ async def handle_audio_chunk(sid, data):
     knowledgebase = data.get("knowledgebase")
 
     if not audio_data_base64:
+        print(f"[SocketIO] Error: No audio data in request from {sid}")
         await sio.emit("extraction_error", {"message": "No audio data provided"}, to=sid, namespace="/extraction")
         return
 
+    print(f"[SocketIO] Received audio_chunk from {sid}. Session: {session_id}. Data size: {len(audio_data_base64)} chars")
+
     try:
         audio_bytes = base64.b64decode(audio_data_base64)
+        print(f"[SocketIO] Decoded base64: {len(audio_bytes)} bytes")
     except Exception as e:
+        print(f"[SocketIO] Base64 decode error: {e}")
         await sio.emit("extraction_error", {"message": f"Invalid base64: {str(e)}"}, to=sid, namespace="/extraction")
         return
 
+    print(f"[SocketIO] Starting VAD validation for {session_id}...")
     if not processor.is_valid_audio(audio_bytes):
+        print(f"[SocketIO] VAD validation failed (Silent or No Speech) for {session_id}")
         await sio.emit("extraction_error", {"message": "No speech detected or audio too quiet."}, to=sid, namespace="/extraction")
         return
+    print(f"[SocketIO] VAD validation successful for {session_id}")
 
     previous_data = SESSIONS.get(session_id, {})
     
@@ -110,6 +135,8 @@ async def handle_audio_chunk(sid, data):
         instructions=instructions,
         knowledgebase=knowledgebase
     )
+
+    print(f"[SocketIO] Prompt built. Requesting LLM extraction for {session_id}...")
 
     await sio.emit("extraction_stream_start", {"stream_id": session_id}, to=sid, namespace="/extraction")
 
